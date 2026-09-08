@@ -1,6 +1,6 @@
-# AI Stock Analyzer — Phase 1 + 2
+# AI Stock Analyzer — Phase 1 + 2 + 3
 
-Implements the first two phases of [`PROJECT_BRIEF.md`](./PROJECT_BRIEF.md):
+Implements the first three phases of [`PROJECT_BRIEF.md`](./PROJECT_BRIEF.md):
 
 - **Phase 1 — live data pipeline**: given a ticker, fetch live technicals,
   options metrics, fundamentals, and a news-driven sentiment score, and
@@ -13,10 +13,23 @@ Implements the first two phases of [`PROJECT_BRIEF.md`](./PROJECT_BRIEF.md):
   verdict, price targets, and options stance), ported to Python **as-is**,
   per the brief: "Don't redesign them yet; the point of Phase 3 is to find
   out if they're any good before you touch them further."
+- **Phase 3 — backtest**: walks 1-2 years of daily history for a ~20-ticker
+  basket, recomputing the composite score at each historical date from only
+  the data available *as of* that date (no lookahead), then checks whether
+  dates the score called "Bullish" actually outperformed dates it called
+  "Bearish" over the following 1 week / 1 month.
 
-See [`NOTES.md`](./NOTES.md) for the Phase 1 approximations made where free
-data sources don't cover something exactly (IV rank, sector-average P/E) and
-how to swap in a better source later.
+See [`NOTES.md`](./NOTES.md) for the approximations made where free data
+sources don't cover something exactly (IV rank, sector-average P/E, and what
+the Phase 3 backtest can and can't reconstruct historically) and how to swap
+in a better source later.
+
+> **This environment can't run a real backtest.** Its network policy blocks
+> outbound access to Yahoo Finance, so `stock_analyzer/backtest.py` was built
+> and tested against synthetic, deterministic price series only (see
+> `tests/test_backtest.py`) — correct math, no real market conclusions yet.
+> Run `python backtest.py` on a machine with normal internet access for
+> actual results.
 
 ## Install
 
@@ -36,7 +49,7 @@ neutral sentiment plus the raw top headline as the catalyst instead.
 ### As a library
 
 ```python
-from stock_analyzer import analyze, score, analyze_and_score
+from stock_analyzer import analyze, score, analyze_and_score, run_backtest
 
 data = analyze("AAPL")               # Phase 1 only: live worksheet inputs
 result = score(data)                  # Phase 2 only: composite score from those inputs
@@ -44,6 +57,9 @@ combined = analyze_and_score("AAPL")  # both: combined["score"] == score(combine
 
 print(data["price"], data["rsi"], data["catalyst"])
 print(result["composite"], result["verdict"], result["stockAction"])
+
+backtest = run_backtest(["AAPL", "MSFT", "NVDA"])  # Phase 3: needs real network access
+print(backtest["edge"])  # bullish vs. bearish mean forward return, per holding window
 ```
 
 ### As a CLI
@@ -101,6 +117,39 @@ Breakdown:
   Band position (BB20)         +1
 ```
 
+### Backtest (Phase 3)
+
+```bash
+python backtest.py                          # default ~20-ticker basket, 2y of history
+python backtest.py AAPL MSFT NVDA --period 1y
+python backtest.py --json
+```
+
+Example report:
+
+```
+=== Backtest: verdict vs. actual forward return ===
+
+Verdict              N     mean 1w   win% 1w     mean 1m   win% 1m
+Bullish            412      +0.68%   +58.98%      +2.10%   +61.41%
+Mildly Bullish     530      +0.31%   +54.15%      +1.05%   +55.66%
+Neutral            301      -0.02%   +49.83%      -0.12%   +48.17%
+Mildly Bearish     288      -0.24%   +45.14%      -1.03%   +42.71%
+Bearish            190      -0.61%   +40.53%      -2.44%   +38.42%
+
+Bullish (+Mildly Bullish) vs. Bearish (+Mildly Bearish), forward return:
+  1w: bullish  +0.47% (n=942) vs. bearish  -0.39% (n=478)  -> edge  +0.86%
+    Bullish periods outperformed Bearish periods over 1w.
+  1m: bullish  +1.51% (n=942) vs. bearish  -1.58% (n=478)  -> edge  +3.09%
+    Bullish periods outperformed Bearish periods over 1m.
+```
+
+(Illustrative numbers — this environment can't reach Yahoo Finance to
+produce real ones; see the warning at the top of this file.) A negative or
+near-zero edge would mean the weights in `scoring.py` aren't actually
+predictive and are due for revision — that's the judgment call this phase
+exists to inform, not something this repo should decide for you.
+
 ## Output shape
 
 `analyze(ticker) -> dict` returns exactly the fields `StockAnalyzer.jsx`'s
@@ -126,6 +175,12 @@ composite: `composite` (0-100), `verdict`/`verdictTone`, `stockAction`,
 `analyze_and_score(ticker) -> dict` is `analyze()`'s dict with `["score"]`
 set to `score(...)` of itself — what the CLI uses.
 
+`run_backtest(tickers=None) -> dict` (Phase 3) returns `{"per_ticker": {...},
+"combined": DataFrame, "summary": DataFrame, "edge": {...}, "warnings":
+[...]}`. `summary` has one row per verdict bucket (n, mean/median/win-rate
+forward return per holding window); `edge` is the Bullish-vs-Bearish
+comparison itself — the number that answers the brief's Phase 3 question.
+
 ## Errors
 
 An invalid/unknown ticker, or a total inability to fetch a price, raises
@@ -133,7 +188,9 @@ An invalid/unknown ticker, or a total inability to fetch a price, raises
 stderr and exits non-zero (CLI use). Partial failures (e.g. can't compute
 VWAP because markets are closed, no options listed, no Anthropic key) don't
 raise — they fall back to a sensible default and are listed in the result's
-`warnings`.
+`warnings`. `run_backtest` raises the same way only if *every* requested
+ticker fails to fetch; a single bad ticker in a basket is skipped with a
+warning instead.
 
 ## Testing
 
@@ -142,37 +199,47 @@ pytest
 ```
 
 Every test mocks `yfinance` and the Anthropic client — no network access or
-API keys are required to run the suite.
+API keys are required to run the suite. The backtest tests use synthetic,
+deterministic price series (a straight uptrend/downtrend) rather than real
+history, including a dedicated test that mutates future prices and asserts a
+historical date's score doesn't change — the no-lookahead guarantee Phase 3
+depends on.
 
 ## Project layout
 
 ```
 analyze.py                   # `python analyze.py TICKER` (Phase 4 preview)
+backtest.py                  # `python backtest.py [TICKER ...]` (Phase 3)
 src/stock_analyzer/
-  __init__.py                 # public API: analyze, score, analyze_and_score, StockAnalysisError
+  __init__.py                 # public API: analyze, score, analyze_and_score, run_backtest, StockAnalysisError
   analyzer.py                 # analyze(ticker) -> dict orchestrator + analyze_and_score()
   technicals.py                # SMA/EMA/RSI/Bollinger Bands/VWAP
   options.py                   # IV rank/percentile + expected move
   fundamentals.py              # P/E, 52-week range, P/E vs. sector
   sentiment.py                 # headlines + Claude tone/catalyst scoring
   scoring.py                   # Phase 2: composite score, ported as-is from StockAnalyzer.jsx
+  backtest.py                   # Phase 3: verdict-vs-forward-return backtest engine
+  backtest_cli.py                # `python backtest.py [...]` implementation
   cli.py, __main__.py          # `python -m stock_analyzer TICKER [...]`
   exceptions.py                # StockAnalysisError
 tests/
   test_technicals.py, test_options.py, test_fundamentals.py,
-  test_sentiment.py, test_scoring.py, test_analyzer.py, test_cli.py
+  test_sentiment.py, test_scoring.py, test_backtest.py, test_backtest_cli.py,
+  test_analyzer.py, test_cli.py
 reference/
   StockAnalyzer.jsx            # the prototype this pipeline replaces / scoring is ported from
 PROJECT_BRIEF.md               # the full build brief
-NOTES.md                       # Phase 1 approximations made and what to revisit
+NOTES.md                       # approximations made (Phase 1 data + Phase 3 backtest inputs) and what to revisit
 ```
 
 ## Next steps
 
-- **Phase 3**: backtest the composite score (`stock_analyzer.scoring`)
-  against ~20 tickers' historical data (no lookahead) before trusting it —
-  the point of Phase 2 being an as-is port is to have something concrete to
-  backtest, not a final formula.
+- **Run the real backtest**: this environment can't reach Yahoo Finance (see
+  the warning above) — run `python backtest.py` yourself and look at the
+  `edge` numbers. If Bullish periods didn't clearly outperform Bearish ones
+  over 1 week/1 month, that's the signal to revisit `scoring.py`'s weights
+  (which is exactly the point of having built Phase 2 as a straight,
+  unmodified port rather than tuning blind).
 - **Phase 4**: this repo's `analyze.py`/CLI already prints a full report
   (data + composite score); decide on scheduled watchlist scans once the
   output is trustworthy daily.

@@ -60,6 +60,29 @@ it falls back to the most recent daily bar's typical price
 `(High+Low+Close)/3`, which is a coarser stand-in, not a true VWAP. This
 fallback is recorded in the result's `warnings`.
 
+## Backtest inputs (`stock_analyzer/backtest.py`, Phase 3)
+
+The composite score's `sentiment` and `peVsSector` inputs come from live news
+and a live sector-ETF lookup — neither has a free, reliable *historical*
+source, so the backtest holds both at neutral (`sentiment=0`, `peVsSector=0`)
+at every historical point. This means Phase 3 backtests the **technicals-only
+reduction** of the composite (trend vs. moving averages, RSI, EMA9 short-term
+trend, Bollinger Band position) — not the full live score, which can also
+move on news/valuation. `ivRank`/`expectedMove` aren't part of the composite
+formula at all (they only drive the options-stance text and price targets),
+so the backtest skips them entirely rather than fabricating history for them.
+
+**Revisit** if you find or pay for a historical news-sentiment or
+sector-P/E feed — plug it into `backtest_ticker()`'s per-date `score(...)`
+call the same way `sentiment=0`/`peVsSector=0` are set now.
+
+This environment's outbound network policy blocks Yahoo Finance
+(`query1.finance.yahoo.com`), so the backtest engine here was built and
+tested entirely against synthetic, deterministic price series (a straight
+uptrend/downtrend) rather than real history — see `tests/test_backtest.py`.
+Run `python backtest.py` on a machine with normal internet access to get
+real results.
+
 ## What did NOT need approximating
 
 - **Price, SMA50/200, EMA9, RSI(14), Bollinger Bands(20)**: computed
