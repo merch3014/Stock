@@ -1,6 +1,6 @@
-# AI Stock Analyzer — Phase 1 + 2 + 3
+# AI Stock Analyzer — Phase 1 + 2 + 3 + 4 (on-demand half)
 
-Implements the first three phases of [`PROJECT_BRIEF.md`](./PROJECT_BRIEF.md):
+Implements PROJECT_BRIEF.md's phases so far:
 
 - **Phase 1 — live data pipeline**: given a ticker, fetch live technicals,
   options metrics, fundamentals, and a news-driven sentiment score, and
@@ -18,6 +18,17 @@ Implements the first three phases of [`PROJECT_BRIEF.md`](./PROJECT_BRIEF.md):
   the data available *as of* that date (no lookahead), then checks whether
   dates the score called "Bullish" actually outperformed dates it called
   "Bearish" over the following 1 week / 1 month.
+- **Phase 4 (on-demand half only)**: scan a whole watchlist file in one CLI
+  call, sorted most-bullish-first. The brief's other Phase 4 half — a
+  scheduled daily scan with cron + email/notification — is **deliberately
+  not built**: the brief itself says "don't build scheduling until the CLI
+  output is something you'd actually trust reading every day," and Phase 3
+  hasn't been run against real data yet to earn that trust (see the callout
+  below). `stock_analyzer.watchlist.scan_watchlist` is written so that
+  whatever ends up triggering a scheduled scan (cron, a task scheduler,
+  whatever email/notification path you pick) can call straight into it —
+  there's no rework needed, just a trigger and a notifier to add once you
+  decide the score is worth it.
 
 See [`NOTES.md`](./NOTES.md) for the approximations made where free data
 sources don't cover something exactly (IV rank, sector-average P/E, and what
@@ -29,7 +40,7 @@ in a better source later.
 > and tested against synthetic, deterministic price series only (see
 > `tests/test_backtest.py`) — correct math, no real market conclusions yet.
 > Run `python backtest.py` on a machine with normal internet access for
-> actual results.
+> actual results, before deciding Phase 4's scheduled half is worth building.
 
 ## Install
 
@@ -117,6 +128,33 @@ Breakdown:
   Band position (BB20)         +1
 ```
 
+### Watchlist scan (Phase 4, on-demand)
+
+```bash
+python -m stock_analyzer --watchlist watchlist.txt          # table, sorted most-bullish-first
+python -m stock_analyzer AAPL MSFT --watchlist watchlist.txt  # positional + file, combined & deduped
+python -m stock_analyzer --watchlist watchlist.txt --full     # full report per ticker instead of a table
+python -m stock_analyzer --watchlist watchlist.txt --json     # same scan, raw JSON list
+```
+
+`--watchlist` reads a plain text file — one ticker per line, `#` starts a
+comment — and defaults to the compact table view (`--table`) since a full
+per-ticker report for a whole watchlist is a lot to scroll through. Edit
+[`watchlist.txt`](./watchlist.txt) (checked in as a starter example) to your
+own tickers. Example table output:
+
+```
+Ticker       Price  Composite  Verdict         Action            Catalyst
+-------------------------------------------------------------------------
+NVDA        118.34         81  Bullish         Add / Initiate    Beats on datacenter demand
+AAPL        227.52         65  Mildly Bullish  Hold / Small Add  Beat on earnings, raised guidance
+MSFT        412.08         51  Neutral         Hold, No Action   Cloud growth in line with estimates
+XOM         110.20          2  Bearish         Reduce / Exit     Oil prices slump on demand worries
+```
+
+A ticker that fails to fetch is skipped (with a warning on stderr) rather
+than aborting the whole scan.
+
 ### Backtest (Phase 3)
 
 ```bash
@@ -181,6 +219,12 @@ set to `score(...)` of itself — what the CLI uses.
 forward return per holding window); `edge` is the Bullish-vs-Bearish
 comparison itself — the number that answers the brief's Phase 3 question.
 
+`scan_watchlist(tickers) -> dict` (Phase 4) returns `{"results": [...],
+"warnings": [...]}`, where each item in `results` is an `analyze_and_score()`
+dict, sorted by `score.composite` descending. `load_watchlist(path) ->
+list[str]` reads a watchlist file into the ticker list `scan_watchlist`
+expects.
+
 ## Errors
 
 An invalid/unknown ticker, or a total inability to fetch a price, raises
@@ -210,8 +254,9 @@ depends on.
 ```
 analyze.py                   # `python analyze.py TICKER` (Phase 4 preview)
 backtest.py                  # `python backtest.py [TICKER ...]` (Phase 3)
+watchlist.txt                # starter example watchlist for --watchlist
 src/stock_analyzer/
-  __init__.py                 # public API: analyze, score, analyze_and_score, run_backtest, StockAnalysisError
+  __init__.py                 # public API: analyze, score, analyze_and_score, run_backtest, scan_watchlist, load_watchlist, StockAnalysisError
   analyzer.py                 # analyze(ticker) -> dict orchestrator + analyze_and_score()
   technicals.py                # SMA/EMA/RSI/Bollinger Bands/VWAP
   options.py                   # IV rank/percentile + expected move
@@ -220,12 +265,13 @@ src/stock_analyzer/
   scoring.py                   # Phase 2: composite score, ported as-is from StockAnalyzer.jsx
   backtest.py                   # Phase 3: verdict-vs-forward-return backtest engine
   backtest_cli.py                # `python backtest.py [...]` implementation
-  cli.py, __main__.py          # `python -m stock_analyzer TICKER [...]`
+  watchlist.py                   # Phase 4 (on-demand half): scan_watchlist(), load_watchlist()
+  cli.py, __main__.py          # `python -m stock_analyzer TICKER [...] [--watchlist FILE] [--table]`
   exceptions.py                # StockAnalysisError
 tests/
   test_technicals.py, test_options.py, test_fundamentals.py,
   test_sentiment.py, test_scoring.py, test_backtest.py, test_backtest_cli.py,
-  test_analyzer.py, test_cli.py
+  test_watchlist.py, test_analyzer.py, test_cli.py
 reference/
   StockAnalyzer.jsx            # the prototype this pipeline replaces / scoring is ported from
 PROJECT_BRIEF.md               # the full build brief
@@ -240,6 +286,8 @@ NOTES.md                       # approximations made (Phase 1 data + Phase 3 bac
   over 1 week/1 month, that's the signal to revisit `scoring.py`'s weights
   (which is exactly the point of having built Phase 2 as a straight,
   unmodified port rather than tuning blind).
-- **Phase 4**: this repo's `analyze.py`/CLI already prints a full report
-  (data + composite score); decide on scheduled watchlist scans once the
-  output is trustworthy daily.
+- **Phase 4, scheduled half**: once the backtest earns some trust, decide on
+  a cron job (or OS task scheduler) that calls `scan_watchlist()` and pushes
+  the result somewhere (email, a notification, a log you check) — deliberately
+  not built yet, per the brief's own "don't build scheduling until you'd
+  trust the output daily."

@@ -1,0 +1,9 @@
+# Personal research watchlist for `python -m stock_analyzer --watchlist watchlist.txt`.
+# One ticker per line. Everything after '#' is a comment. Edit freely —
+# this is just a starter example, not a recommendation.
+
+AAPL
+MSFT
+NVDA
+AMZN
+GOOGL

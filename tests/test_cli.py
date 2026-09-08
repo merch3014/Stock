@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 from unittest.mock import patch
 
+import pytest
+
 from stock_analyzer.cli import main
-from stock_analyzer.exceptions import StockAnalysisError
 
 _SAMPLE = {
     "ticker": "AAPL",
@@ -50,9 +51,13 @@ _SAMPLE = {
 }
 
 
-@patch("stock_analyzer.cli.analyze_and_score")
-def test_main_json_single_ticker(mock_analyze, capsys):
-    mock_analyze.return_value = _SAMPLE
+def _scan(results, warnings=None):
+    return {"results": results, "warnings": warnings or []}
+
+
+@patch("stock_analyzer.cli.scan_watchlist")
+def test_main_json_single_ticker(mock_scan, capsys):
+    mock_scan.return_value = _scan([_SAMPLE])
 
     exit_code = main(["AAPL", "--json"])
 
@@ -61,9 +66,9 @@ def test_main_json_single_ticker(mock_analyze, capsys):
     assert json.loads(captured.out) == _SAMPLE
 
 
-@patch("stock_analyzer.cli.analyze_and_score")
-def test_main_json_multiple_tickers_is_array(mock_analyze, capsys):
-    mock_analyze.side_effect = [_SAMPLE, {**_SAMPLE, "ticker": "MSFT"}]
+@patch("stock_analyzer.cli.scan_watchlist")
+def test_main_json_multiple_tickers_is_array(mock_scan, capsys):
+    mock_scan.return_value = _scan([_SAMPLE, {**_SAMPLE, "ticker": "MSFT"}])
 
     exit_code = main(["AAPL", "MSFT", "--json"])
 
@@ -73,9 +78,9 @@ def test_main_json_multiple_tickers_is_array(mock_analyze, capsys):
     assert [item["ticker"] for item in parsed] == ["AAPL", "MSFT"]
 
 
-@patch("stock_analyzer.cli.analyze_and_score")
-def test_main_report_mode_prints_readable_output(mock_analyze, capsys):
-    mock_analyze.return_value = _SAMPLE
+@patch("stock_analyzer.cli.scan_watchlist")
+def test_main_report_mode_prints_readable_output(mock_scan, capsys):
+    mock_scan.return_value = _scan([_SAMPLE])
 
     exit_code = main(["AAPL"])
 
@@ -89,12 +94,70 @@ def test_main_report_mode_prints_readable_output(mock_analyze, capsys):
     assert "Trend (price vs MAs)" in captured.out
 
 
-@patch("stock_analyzer.cli.analyze_and_score")
-def test_main_reports_error_and_nonzero_exit(mock_analyze, capsys):
-    mock_analyze.side_effect = StockAnalysisError("No price data found for 'BAD'.")
+@patch("stock_analyzer.cli.scan_watchlist")
+def test_main_table_mode(mock_scan, capsys):
+    mock_scan.return_value = _scan([_SAMPLE, {**_SAMPLE, "ticker": "MSFT"}])
+
+    exit_code = main(["AAPL", "MSFT", "--table"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Ticker" in captured.out and "Composite" in captured.out
+    assert "AAPL" in captured.out and "MSFT" in captured.out
+    assert "Mildly Bullish" in captured.out
+    # Table mode is one line per ticker, not the full field dump.
+    assert "SMA 50" not in captured.out
+
+
+@patch("stock_analyzer.cli.scan_watchlist")
+def test_main_reports_error_and_nonzero_exit(mock_scan, capsys):
+    mock_scan.return_value = _scan([], warnings=["Could not analyze BAD: No price data found for 'BAD'."])
 
     exit_code = main(["BAD"])
 
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "No price data found" in captured.err
+
+
+@patch("stock_analyzer.cli.scan_watchlist")
+def test_main_watchlist_file_combined_with_positional_and_defaults_to_table(mock_scan, capsys, tmp_path):
+    watchlist_file = tmp_path / "watchlist.txt"
+    watchlist_file.write_text("# comment\nMSFT\nAAPL\n")
+    mock_scan.return_value = _scan([_SAMPLE, {**_SAMPLE, "ticker": "MSFT"}])
+
+    exit_code = main(["AAPL", "--watchlist", str(watchlist_file)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    # AAPL given positionally + MSFT/AAPL from the file -> deduped to [AAPL, MSFT]
+    called_tickers = mock_scan.call_args[0][0]
+    assert called_tickers == ["AAPL", "MSFT"]
+    # --watchlist defaults to table mode, not a full report.
+    assert "SMA 50" not in captured.out
+    assert "Ticker" in captured.out
+
+
+@patch("stock_analyzer.cli.scan_watchlist")
+def test_main_watchlist_full_forces_full_report(mock_scan, capsys, tmp_path):
+    watchlist_file = tmp_path / "watchlist.txt"
+    watchlist_file.write_text("AAPL\n")
+    mock_scan.return_value = _scan([_SAMPLE])
+
+    main(["--watchlist", str(watchlist_file), "--full"])
+
+    captured = capsys.readouterr()
+    assert "SMA 50" in captured.out
+
+
+def test_main_errors_when_no_tickers_and_no_watchlist(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main([])
+    assert exc_info.value.code == 2  # argparse.error()'s exit code
+    assert "no tickers given" in capsys.readouterr().err
+
+
+def test_main_errors_on_missing_watchlist_file(capsys):
+    exit_code = main(["--watchlist", "/nonexistent/path/watchlist.txt"])
+    assert exit_code == 1
+    assert "could not read watchlist" in capsys.readouterr().err
