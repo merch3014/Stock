@@ -1,14 +1,22 @@
-# AI Stock Analyzer — Phase 1: Live Data Pipeline
+# AI Stock Analyzer — Phase 1 + 2
 
-Phase 1 of [`PROJECT_BRIEF.md`](./PROJECT_BRIEF.md): given a ticker, fetch live
-technicals, options metrics, fundamentals, and a news-driven sentiment score,
-and return them as a single dict shaped to exactly match every input field
-[`reference/StockAnalyzer.jsx`](./reference/StockAnalyzer.jsx)'s worksheet
-needs — a drop-in replacement for manual/screenshot entry.
+Implements the first two phases of [`PROJECT_BRIEF.md`](./PROJECT_BRIEF.md):
 
-See [`NOTES.md`](./NOTES.md) for the approximations made where free data
-sources don't cover something exactly (IV rank, sector-average P/E) and how
-to swap in a better source later.
+- **Phase 1 — live data pipeline**: given a ticker, fetch live technicals,
+  options metrics, fundamentals, and a news-driven sentiment score, and
+  return them as a single dict shaped to exactly match every input field
+  [`reference/StockAnalyzer.jsx`](./reference/StockAnalyzer.jsx)'s worksheet
+  needs — a drop-in replacement for manual/screenshot entry.
+- **Phase 2 — composite scoring**: `StockAnalyzer.jsx`'s `useMemo` scoring
+  block (trend vs. moving averages, RSI, sentiment, valuation vs. sector,
+  EMA9 short-term trend, Bollinger Band position → a 0-100 composite,
+  verdict, price targets, and options stance), ported to Python **as-is**,
+  per the brief: "Don't redesign them yet; the point of Phase 3 is to find
+  out if they're any good before you touch them further."
+
+See [`NOTES.md`](./NOTES.md) for the Phase 1 approximations made where free
+data sources don't cover something exactly (IV rank, sector-average P/E) and
+how to swap in a better source later.
 
 ## Install
 
@@ -28,10 +36,14 @@ neutral sentiment plus the raw top headline as the catalyst instead.
 ### As a library
 
 ```python
-from stock_analyzer import analyze
+from stock_analyzer import analyze, score, analyze_and_score
 
-data = analyze("AAPL")
+data = analyze("AAPL")               # Phase 1 only: live worksheet inputs
+result = score(data)                  # Phase 2 only: composite score from those inputs
+combined = analyze_and_score("AAPL")  # both: combined["score"] == score(combined)
+
 print(data["price"], data["rsi"], data["catalyst"])
+print(result["composite"], result["verdict"], result["stockAction"])
 ```
 
 ### As a CLI
@@ -51,7 +63,7 @@ python -m stock_analyzer AAPL MSFT GOOG   # multiple tickers
 python -m stock_analyzer AAPL --json --indent 0
 ```
 
-Example report:
+Example report (now including the Phase 2 composite score):
 
 ```
 === AAPL ===
@@ -75,6 +87,18 @@ P/E vs sector %      12.40
 52-week low          164.08
 Sentiment (-2..2)    1
 Catalyst             Beat on earnings, raised full-year guidance
+
+Composite: 65 (Mildly Bullish)
+Stock action:  Hold / Small Add
+Options view:  Buy calls or call debit spreads — cheap premium, favorable trend.
+Price target:  $230.10 - $242.80  (profit-take $238.40, stop $220.10)
+Breakdown:
+  Trend (price vs MAs)         +9
+  Momentum (RSI)               +7
+  News / sentiment             +12
+  Valuation vs sector          -6
+  Short-term trend (EMA9)      +2
+  Band position (BB20)         +1
 ```
 
 ## Output shape
@@ -92,6 +116,15 @@ extras the worksheet can ignore:
 | `sentiment`, `catalyst` | yfinance headlines scored by the Claude API |
 | `fetchedAt` | UTC timestamp of the fetch |
 | `sectorAvgPE`, `warnings` | diagnostics: the sector ETF's P/E used, and any fallbacks that were triggered |
+
+`score(data) -> dict` (Phase 2) takes that same shape and returns the
+composite: `composite` (0-100), `verdict`/`verdictTone`, `stockAction`,
+`optionsView`, `targetLow`/`targetHigh`/`profitTake`/`stopLevel`, and a
+`breakdown` list of each sub-score's `{label, value}` — a direct port of
+`StockAnalyzer.jsx`'s `result` object, weights and all.
+
+`analyze_and_score(ticker) -> dict` is `analyze()`'s dict with `["score"]`
+set to `score(...)` of itself — what the CLI uses.
 
 ## Errors
 
@@ -116,29 +149,30 @@ API keys are required to run the suite.
 ```
 analyze.py                   # `python analyze.py TICKER` (Phase 4 preview)
 src/stock_analyzer/
-  __init__.py                 # public API: analyze, StockAnalysisError
-  analyzer.py                 # analyze(ticker) -> dict orchestrator
+  __init__.py                 # public API: analyze, score, analyze_and_score, StockAnalysisError
+  analyzer.py                 # analyze(ticker) -> dict orchestrator + analyze_and_score()
   technicals.py                # SMA/EMA/RSI/Bollinger Bands/VWAP
   options.py                   # IV rank/percentile + expected move
   fundamentals.py              # P/E, 52-week range, P/E vs. sector
   sentiment.py                 # headlines + Claude tone/catalyst scoring
+  scoring.py                   # Phase 2: composite score, ported as-is from StockAnalyzer.jsx
   cli.py, __main__.py          # `python -m stock_analyzer TICKER [...]`
   exceptions.py                # StockAnalysisError
 tests/
   test_technicals.py, test_options.py, test_fundamentals.py,
-  test_sentiment.py, test_analyzer.py, test_cli.py
+  test_sentiment.py, test_scoring.py, test_analyzer.py, test_cli.py
 reference/
-  StockAnalyzer.jsx            # the prototype worksheet this feeds (Phase 2 reference)
+  StockAnalyzer.jsx            # the prototype this pipeline replaces / scoring is ported from
 PROJECT_BRIEF.md               # the full build brief
-NOTES.md                       # approximations made and what to revisit
+NOTES.md                       # Phase 1 approximations made and what to revisit
 ```
 
 ## Next steps
 
-- **Phase 2**: port `StockAnalyzer.jsx`'s `useMemo` composite-scoring block
-  (trend/RSI/sentiment/valuation/EMA9/Bollinger position → 0-100 score) into
-  Python, feeding it from this module's `analyze()` output.
-- **Phase 3**: backtest the composite score against ~20 tickers' historical
-  data (no lookahead) before trusting it.
-- **Phase 4**: this repo's `analyze.py`/CLI is already a starting point;
-  decide on scheduled watchlist scans once the output is trustworthy daily.
+- **Phase 3**: backtest the composite score (`stock_analyzer.scoring`)
+  against ~20 tickers' historical data (no lookahead) before trusting it —
+  the point of Phase 2 being an as-is port is to have something concrete to
+  backtest, not a final formula.
+- **Phase 4**: this repo's `analyze.py`/CLI already prints a full report
+  (data + composite score); decide on scheduled watchlist scans once the
+  output is trustworthy daily.

@@ -1,9 +1,11 @@
 """Command-line entry point: `python -m stock_analyzer TICKER [TICKER ...]`.
 
 Two output modes:
-- default: a short human-readable report per ticker (Phase 4 preview)
-- --json: raw `analyze(ticker)` output, one JSON object (or array for
-  multiple tickers), for piping into another process
+- default: a short human-readable report per ticker (Phase 4 preview),
+  including the Phase 2 composite score
+- --json: raw `analyze_and_score(ticker)` output (analyze()'s fields plus a
+  nested "score" key), one JSON object (or array for multiple tickers), for
+  piping into another process
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ import argparse
 import json
 import sys
 
-from .analyzer import analyze
+from .analyzer import analyze_and_score
 from .exceptions import StockAnalysisError
 
 _REPORT_FIELDS = [
@@ -41,6 +43,22 @@ def _format_report(data: dict) -> str:
     lines = [f"=== {data['ticker']} ===", f"Fetched: {data['fetchedAt']}", ""]
     for key, label in _REPORT_FIELDS:
         lines.append(f"{label:<20} {data.get(key)}")
+
+    score = data.get("score")
+    if score:
+        lines.append("")
+        lines.append(f"Composite: {round(score['composite'])} ({score['verdict']})")
+        lines.append(f"Stock action:  {score['stockAction']}")
+        lines.append(f"Options view:  {score['optionsView']}")
+        lines.append(
+            f"Price target:  ${score['targetLow']:.2f} - ${score['targetHigh']:.2f}  "
+            f"(profit-take ${score['profitTake']:.2f}, stop ${score['stopLevel']:.2f})"
+        )
+        lines.append("Breakdown:")
+        for row in score["breakdown"]:
+            sign = "+" if row["value"] >= 0 else ""
+            lines.append(f"  {row['label']:<28} {sign}{row['value']:.0f}")
+
     if data.get("warnings"):
         lines.append("")
         lines.append("Warnings:")
@@ -62,7 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--json",
         action="store_true",
-        help="Print raw analyze() JSON instead of a formatted report.",
+        help="Print raw analyze_and_score() JSON instead of a formatted report.",
     )
     parser.add_argument(
         "--indent",
@@ -81,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     exit_code = 0
     for ticker in args.tickers:
         try:
-            results.append(analyze(ticker))
+            results.append(analyze_and_score(ticker))
         except StockAnalysisError as exc:
             print(f"error: {exc}", file=sys.stderr)
             exit_code = 1

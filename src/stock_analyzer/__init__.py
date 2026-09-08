@@ -1,12 +1,18 @@
-"""stock_analyzer: Phase 1 live data pipeline for the AI Stock Analyzer.
+"""stock_analyzer: live data pipeline (Phase 1) + composite scoring (Phase 2)
+for the AI Stock Analyzer.
 
-Public API: `analyze(ticker) -> dict`, matching every input field
-StockAnalyzer.jsx's worksheet needs (see PROJECT_BRIEF.md / reference/StockAnalyzer.jsx).
+Public API:
+    analyze(ticker) -> dict          Phase 1: live worksheet inputs
+    score(data) -> dict               Phase 2: composite score from those inputs
+    analyze_and_score(ticker) -> dict  both, combined (data["score"] = score(data))
+
+See PROJECT_BRIEF.md / reference/StockAnalyzer.jsx for what these are ported from.
 """
 
-from .analyzer import analyze
+from .analyzer import analyze, analyze_and_score
 from .exceptions import StockAnalysisError
+from .scoring import score
 
-__all__ = ["analyze", "StockAnalysisError"]
+__all__ = ["analyze", "score", "analyze_and_score", "StockAnalysisError"]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

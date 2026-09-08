@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pandas as pd
 import pytest
 
-from stock_analyzer import StockAnalysisError, analyze
+from stock_analyzer import StockAnalysisError, analyze, analyze_and_score
 
 
 def _daily_frame(closes: list[float]) -> pd.DataFrame:
@@ -94,3 +94,20 @@ def test_analyze_survives_history_fetch_failure():
     # Falls back to price-based technicals rather than raising.
     assert data["ma50"] == data["price"]
     assert any("history" in w.lower() for w in data["warnings"])
+
+
+def test_analyze_and_score_attaches_composite_score():
+    fake_ticker = _make_fake_yf_ticker()
+
+    data = analyze_and_score(
+        "aapl", yf_ticker_factory=lambda symbol: fake_ticker, etf_pe_fetcher=lambda symbol: 24.0
+    )
+
+    assert "score" in data
+    score = data["score"]
+    assert 0 <= score["composite"] <= 100
+    assert score["verdict"] in {"Bullish", "Mildly Bullish", "Neutral", "Mildly Bearish", "Bearish"}
+    assert len(score["breakdown"]) == 6
+    # analyze()'s own fields are still present alongside the score.
+    assert data["ticker"] == "AAPL"
+    assert data["price"] == 150.0

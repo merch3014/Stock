@@ -19,6 +19,7 @@ import yfinance as yf
 from .exceptions import StockAnalysisError
 from .fundamentals import compute_fundamentals
 from .options import compute_options_metrics
+from .scoring import score
 from .sentiment import MessagesClient, fetch_news_headlines, score_sentiment_and_catalyst
 from .technicals import compute_technicals
 
@@ -117,3 +118,29 @@ def analyze(
         "fetchedAt": datetime.now(timezone.utc).isoformat(),
         "warnings": warnings,
     }
+
+
+def analyze_and_score(
+    ticker: str,
+    *,
+    anthropic_api_key: str | None = None,
+    yf_ticker_factory: Callable[[str], Any] = yf.Ticker,
+    sentiment_client: MessagesClient | None = None,
+    etf_pe_fetcher: Callable[[str], float | None] = _default_etf_pe_fetcher,
+) -> dict:
+    """`analyze(ticker)`, plus the Phase 2 composite score under `data["score"]`.
+
+    This is the Phase 1 + Phase 2 pipeline combined: live data in, the
+    ported StockAnalyzer.jsx composite score out. See `stock_analyzer.scoring`
+    for the scoring logic itself, which is a straight, unmodified port —
+    Phase 3 is what decides whether these weights deserve to change.
+    """
+    data = analyze(
+        ticker,
+        anthropic_api_key=anthropic_api_key,
+        yf_ticker_factory=yf_ticker_factory,
+        sentiment_client=sentiment_client,
+        etf_pe_fetcher=etf_pe_fetcher,
+    )
+    data["score"] = score(data)
+    return data
