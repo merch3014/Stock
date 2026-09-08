@@ -1,6 +1,6 @@
-# AI Stock Analyzer — Phase 1 + 2 + 3 + 4 (on-demand half)
+# AI Stock Analyzer — Phase 1 + 2 + 3 + 4
 
-Implements PROJECT_BRIEF.md's phases so far:
+Implements all four of PROJECT_BRIEF.md's phases:
 
 - **Phase 1 — live data pipeline**: given a ticker, fetch live technicals,
   options metrics, fundamentals, and a news-driven sentiment score, and
@@ -18,17 +18,17 @@ Implements PROJECT_BRIEF.md's phases so far:
   the data available *as of* that date (no lookahead), then checks whether
   dates the score called "Bullish" actually outperformed dates it called
   "Bearish" over the following 1 week / 1 month.
-- **Phase 4 (on-demand half only)**: scan a whole watchlist file in one CLI
-  call, sorted most-bullish-first. The brief's other Phase 4 half — a
-  scheduled daily scan with cron + email/notification — is **deliberately
-  not built**: the brief itself says "don't build scheduling until the CLI
-  output is something you'd actually trust reading every day," and Phase 3
-  hasn't been run against real data yet to earn that trust (see the callout
-  below). `stock_analyzer.watchlist.scan_watchlist` is written so that
-  whatever ends up triggering a scheduled scan (cron, a task scheduler,
-  whatever email/notification path you pick) can call straight into it —
-  there's no rework needed, just a trigger and a notifier to add once you
-  decide the score is worth it.
+- **Phase 4 — output & cadence**: an on-demand watchlist scan (`--watchlist`,
+  sorted most-bullish-first), plus a scheduled-scan script
+  (`scheduled_scan.py`) that prints or emails the same digest — the piece a
+  cron job or OS task scheduler would call. **This repo does not install,
+  create, or enable any actual schedule** — no crontab entry, no systemd
+  timer, nothing running unattended. Wiring one up is a manual step you take
+  yourself (see "Scheduling it yourself" below), deliberately kept separate:
+  the brief says "don't build scheduling until the CLI output is something
+  you'd actually trust reading every day," and Phase 3 hasn't run against
+  real data yet to earn that trust (see the callout below). The code is
+  ready the moment you decide it's earned that trust.
 
 See [`NOTES.md`](./NOTES.md) for the approximations made where free data
 sources don't cover something exactly (IV rank, sector-average P/E, and what
@@ -40,7 +40,7 @@ in a better source later.
 > and tested against synthetic, deterministic price series only (see
 > `tests/test_backtest.py`) — correct math, no real market conclusions yet.
 > Run `python backtest.py` on a machine with normal internet access for
-> actual results, before deciding Phase 4's scheduled half is worth building.
+> actual results before you actually schedule `scheduled_scan.py` anywhere.
 
 ## Install
 
@@ -155,6 +155,52 @@ XOM         110.20          2  Bearish         Reduce / Exit     Oil prices slum
 A ticker that fails to fetch is skipped (with a warning on stderr) rather
 than aborting the whole scan.
 
+### Scheduled scan (Phase 4, cadence)
+
+`scheduled_scan.py` is what a cron entry / OS task scheduler would call: it
+scans a watchlist and prints — or, with `--email`, sends — a digest.
+
+```bash
+python scheduled_scan.py                      # uses watchlist.txt by default, prints the digest
+python scheduled_scan.py --watchlist my.txt    # a different watchlist file
+python scheduled_scan.py --email               # send instead of print (needs SMTP_* env vars, below)
+```
+
+Without `--email` it just prints, which is all you need for a cron entry
+that redirects to a logfile you check yourself:
+
+```cron
+# crontab -e — run at 7am on weekdays, log to a file
+0 7 * * 1-5 cd /path/to/Stock && /path/to/venv/bin/python scheduled_scan.py >> logs/scan.log 2>&1
+```
+
+For an actual email, `--email` reads plain SMTP settings from environment
+variables (no third-party notification service, works with an existing
+Gmail/Fastmail/etc. account via an app password) — see
+[`stock_analyzer/notify.py`](./src/stock_analyzer/notify.py) for the full
+list:
+
+```bash
+export SMTP_HOST=smtp.gmail.com
+export SMTP_PORT=587
+export SMTP_USER=you@gmail.com
+export SMTP_PASSWORD=your-app-password   # never your real account password
+export SMTP_FROM=you@gmail.com
+export SMTP_TO=you@gmail.com             # can be the same address — mail yourself
+python scheduled_scan.py --email
+```
+
+If `--email` is given but any `SMTP_*` variable is missing, it prints the
+digest and exits non-zero instead of silently failing — same if the send
+itself fails (bad credentials, network issue): the digest still prints so
+a cron log always has the content even when delivery didn't happen.
+
+**This repo will not add the crontab line, a systemd timer, or any other
+schedule for you.** That's a decision this brief explicitly gates on
+trusting the output daily — see the callout at the top of this file — and
+it's specific to your machine and your judgment, not something to automate
+away.
+
 ### Backtest (Phase 3)
 
 ```bash
@@ -252,8 +298,9 @@ depends on.
 ## Project layout
 
 ```
-analyze.py                   # `python analyze.py TICKER` (Phase 4 preview)
+analyze.py                   # `python analyze.py TICKER`
 backtest.py                  # `python backtest.py [TICKER ...]` (Phase 3)
+scheduled_scan.py            # `python scheduled_scan.py [--watchlist FILE] [--email]` (Phase 4, cadence)
 watchlist.txt                # starter example watchlist for --watchlist
 src/stock_analyzer/
   __init__.py                 # public API: analyze, score, analyze_and_score, run_backtest, scan_watchlist, load_watchlist, StockAnalysisError
@@ -265,13 +312,17 @@ src/stock_analyzer/
   scoring.py                   # Phase 2: composite score, ported as-is from StockAnalyzer.jsx
   backtest.py                   # Phase 3: verdict-vs-forward-return backtest engine
   backtest_cli.py                # `python backtest.py [...]` implementation
-  watchlist.py                   # Phase 4 (on-demand half): scan_watchlist(), load_watchlist()
+  watchlist.py                   # Phase 4 (on-demand): scan_watchlist(), load_watchlist()
+  scheduled_scan.py               # Phase 4 (cadence): the cron-callable script's implementation
+  notify.py                       # SMTP email notifier, config via SMTP_* env vars
+  reporting.py                    # format_report/format_table/format_digest, shared by cli.py + scheduled_scan.py
   cli.py, __main__.py          # `python -m stock_analyzer TICKER [...] [--watchlist FILE] [--table]`
   exceptions.py                # StockAnalysisError
 tests/
   test_technicals.py, test_options.py, test_fundamentals.py,
   test_sentiment.py, test_scoring.py, test_backtest.py, test_backtest_cli.py,
-  test_watchlist.py, test_analyzer.py, test_cli.py
+  test_watchlist.py, test_notify.py, test_scheduled_scan.py, test_reporting.py,
+  test_analyzer.py, test_cli.py
 reference/
   StockAnalyzer.jsx            # the prototype this pipeline replaces / scoring is ported from
 PROJECT_BRIEF.md               # the full build brief
@@ -286,8 +337,7 @@ NOTES.md                       # approximations made (Phase 1 data + Phase 3 bac
   over 1 week/1 month, that's the signal to revisit `scoring.py`'s weights
   (which is exactly the point of having built Phase 2 as a straight,
   unmodified port rather than tuning blind).
-- **Phase 4, scheduled half**: once the backtest earns some trust, decide on
-  a cron job (or OS task scheduler) that calls `scan_watchlist()` and pushes
-  the result somewhere (email, a notification, a log you check) — deliberately
-  not built yet, per the brief's own "don't build scheduling until you'd
-  trust the output daily."
+- **Decide whether to actually schedule it**: `scheduled_scan.py` is written
+  and tested, but nothing schedules it — that's still your call, to make
+  once the backtest above says the score is worth reading (or being emailed)
+  daily. See "Scheduling it yourself" for the crontab line when you're ready.

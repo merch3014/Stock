@@ -83,6 +83,18 @@ uptrend/downtrend) rather than real history — see `tests/test_backtest.py`.
 Run `python backtest.py` on a machine with normal internet access to get
 real results.
 
+## Scheduled scan (`stock_analyzer/scheduled_scan.py`, Phase 4)
+
+`scheduled_scan.py` and `notify.py` are written and tested (with a fake SMTP
+class — no real mail server touched by the test suite either), but nothing
+in this repo schedules them. No crontab entry, systemd timer, or launchd
+agent is installed anywhere. That's intentional: the brief gates scheduling
+on trusting the composite score daily, and this environment can't produce a
+real Phase 3 backtest result to establish that trust (see above). Add the
+actual schedule yourself, on your own machine, once you've run
+`python backtest.py` for real and are satisfied with what `edge` says — see
+README.md's "Scheduling it yourself" for the crontab line.
+
 ## What did NOT need approximating
 
 - **Price, SMA50/200, EMA9, RSI(14), Bollinger Bands(20)**: computed
