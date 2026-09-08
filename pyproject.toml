@@ -3,14 +3,17 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "stock-fetcher"
+name = "stock-analyzer"
 version = "0.1.0"
-description = "Phase 1: fetch live stock data for a ticker in worksheet-ready shape."
+description = "Phase 1: live data pipeline for the AI Stock Analyzer worksheet."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
     "yfinance>=0.2.40",
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "anthropic>=0.30",
 ]
 
 [project.optional-dependencies]
@@ -20,7 +23,7 @@ dev = [
 ]
 
 [project.scripts]
-stock-fetcher = "stock_fetcher.cli:main"
+stock-analyzer = "stock_analyzer.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
